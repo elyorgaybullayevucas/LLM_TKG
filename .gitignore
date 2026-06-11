@@ -1,22 +1,43 @@
-# ── Datasets (raw + processed) ──────────────────────────────────────────────
+# ── Datasets (raw + processed — DO NOT commit) ───────────────────────────────
 data/
 
 # ── Model checkpoints & outputs ──────────────────────────────────────────────
 model/
 output/
 
-# ── Python cache ─────────────────────────────────────────────────────────────
+# ── Python cache ──────────────────────────────────────────────────────────────
 __pycache__/
-*.py[cod]
+*.py[codz]
+*$py.class
 *.pyo
 *.pyd
+*.so
 .Python
+
+# ── Build / packaging ─────────────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+wheels/
 
 # ── Virtual environments ──────────────────────────────────────────────────────
 .venv/
 venv/
 env/
+ENV/
 .env
+.envrc
+
+# ── Large binary model files ──────────────────────────────────────────────────
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.gguf
+*.onnx
 
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
@@ -28,21 +49,35 @@ wandb/
 # ── HuggingFace cache ─────────────────────────────────────────────────────────
 .cache/
 
-# ── Large binary / generated files ───────────────────────────────────────────
-*.bin
-*.pt
-*.pth
-*.safetensors
-*.gguf
-*.onnx
-
-# ── Logs & temp ───────────────────────────────────────────────────────────────
+# ── Logs, temp, analysis ──────────────────────────────────────────────────────
 *.log
 *.tmp
 *.swp
 analysis/
+tempCodeRunnerFile.py
 
-# ── OS noise ─────────────────────────────────────────────────────────────────
+# ── Test / coverage ───────────────────────────────────────────────────────────
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.pytest_cache/
+.hypothesis/
+
+# ── Type checkers ─────────────────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+.spyderproject
+.ropeproject
+
+# ── OS noise ──────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
