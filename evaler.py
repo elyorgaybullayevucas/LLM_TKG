@@ -32,7 +32,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from tqdm import tqdm
 import time
 from data_utils.basic import read_txt_as_list, read_json
-from eval_utils import read_results, read_num_and_li_results
+from eval_utils import read_results, read_num_and_li as read_num_and_li_results
 
 import json
 import os
