@@ -52,6 +52,8 @@ def parse_args():
     p.add_argument("--model", default="llama2",
                    choices=["llama2", "llama3"],
                    help="Base LLM")
+    p.add_argument("--model_path", default="",
+                   help="Local path to model (overrides HuggingFace download)")
     p.add_argument("--bit4", default=False, action="store_true",
                    help="4-bit quantisation (saves GPU memory)")
 
@@ -144,8 +146,12 @@ def stage_train(args, cfg, align_path=None, full_path=None):
     from utils import (get_dataset, get_lora_config, get_model_and_tokenizer,
                        get_trainer, process_data)
 
-    model_name = ("meta-llama/Meta-Llama-3-8B" if args.model == "llama3"
-                  else "meta-llama/Llama-2-7b-hf")
+    if args.model_path:
+        model_name = args.model_path
+    elif args.model == "llama3":
+        model_name = "meta-llama/Meta-Llama-3-8B"
+    else:
+        model_name = "meta-llama/Llama-2-7b-hf"
 
     # Build paths if not supplied
     proc = Path(args.data_root) / args.dataset / "processed"
@@ -251,8 +257,12 @@ def stage_eval(args, cfg, checkpoint_dir=None):
     from eval_utils import load_model, read_answers, read_test_file, read_last_metric
     from evaler import Evaler
 
-    model_name = ("meta-llama/Meta-Llama-3-8B" if args.model == "llama3"
-                  else "meta-llama/Llama-2-7b-hf")
+    if args.model_path:
+        model_name = args.model_path
+    elif args.model == "llama3":
+        model_name = "meta-llama/Meta-Llama-3-8B"
+    else:
+        model_name = "meta-llama/Llama-2-7b-hf"
 
     ckpt = args.checkpoint or checkpoint_dir or str(
         Path(args.model_dir) /
