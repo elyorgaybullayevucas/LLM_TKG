@@ -195,7 +195,7 @@ def stage_train(args, cfg, align_path=None, full_path=None):
         SAVE_TOTAL_LIMIT   = 2
         LOAD_BEST_MODEL_AT_END = 0
         LOGGING_STEPS      = 1
-        REPORT_TO          = None
+        REPORT_TO          = "none"
         PROJ_NAME          = f"RECIPE_TKG_{args.dataset}"
         RUN_NAME           = None
         OUTPUT_DIR         = out_dir
