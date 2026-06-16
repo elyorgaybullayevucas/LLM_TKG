@@ -22,8 +22,9 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
 
 def get_model_and_tokenizer(args, config):
     if args.BIT_8:
+        qcfg8 = BitsAndBytesConfig(load_in_8bit=True)
         model = AutoModelForCausalLM.from_pretrained(
-            args.MODEL_NAME, load_in_8bit=True,
+            args.MODEL_NAME, quantization_config=qcfg8,
             device_map="auto", trust_remote_code=True)
     elif args.BIT_4:
         qcfg = BitsAndBytesConfig(
