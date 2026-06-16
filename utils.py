@@ -26,6 +26,7 @@ def get_model_and_tokenizer(args, config):
         model = AutoModelForCausalLM.from_pretrained(
             args.MODEL_NAME, quantization_config=qcfg8,
             device_map="auto", trust_remote_code=True)
+        model = prepare_model_for_kbit_training(model)
     elif args.BIT_4:
         qcfg = BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_use_double_quant=True,
@@ -396,6 +397,7 @@ def get_trainer(args, model, data, tokenizer):
         logging_steps=args.LOGGING_STEPS,
         fp16=False, bf16=True,
         adam_beta1=0.9, adam_beta2=0.95,
+        gradient_checkpointing=True,
     )
     collator = transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False)
     common = dict(train_dataset=data["train"], args=tr_args,
