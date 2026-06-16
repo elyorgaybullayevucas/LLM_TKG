@@ -56,6 +56,8 @@ def parse_args():
                    help="Local path to model (overrides HuggingFace download)")
     p.add_argument("--bit4", default=False, action="store_true",
                    help="4-bit quantisation (saves GPU memory)")
+    p.add_argument("--bit8", default=False, action="store_true",
+                   help="8-bit quantisation (more compatible than 4-bit)")
 
     # retrieval
     p.add_argument("--retrieve_type", default="rbmh",
@@ -172,7 +174,7 @@ def stage_train(args, cfg, align_path=None, full_path=None):
     class TrainArgs:
         MODEL_NAME         = model_name
         BIT_4              = args.bit4
-        BIT_8              = False
+        BIT_8              = args.bit8
         LORA_R             = args.lora_r
         LORA_ALPHA         = args.lora_r * 2
         LORA_DROPOUT       = 0.05
