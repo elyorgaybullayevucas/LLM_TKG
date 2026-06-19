@@ -42,20 +42,6 @@ def read_answers(path):
     return ans
 
 
-def extract_entity(decoded):
-    # after [/INST], take the generated part
-    if "[/INST]" in decoded:
-        gen = decoded.split("[/INST]")[-1].strip()
-    else:
-        gen = decoded.strip()
-    # remove </s> and anything after
-    gen = gen.split("</s>")[0].strip()
-    # remove id prefix "123.EntityName"
-    m = re.match(r"^\d+\.(.*)", gen)
-    if m:
-        gen = m.group(1).strip()
-    return gen
-
 
 def eval_model(model, tokenizer, tests, answers, max_new_tokens=30, num_beams=10, limit=None, debug=5):
     ins = ("<s>[INST] <<SYS>> You must be able to correctly predict the next "
@@ -84,10 +70,15 @@ def eval_model(model, tokenizer, tests, answers, max_new_tokens=30, num_beams=10
                 pad_token_id=tokenizer.eos_token_id,
             )
 
+        input_len = enc["input_ids"].shape[1]
         preds = []
         for seq in out:
-            decoded = tokenizer.decode(seq, skip_special_tokens=False)
-            entity = extract_entity(decoded)
+            new_tokens = seq[input_len:]
+            decoded = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+            # remove id prefix "123.EntityName"
+            m = re.match(r"^\d+\.(.*)", decoded)
+            entity = m.group(1).strip() if m else decoded
+            entity = entity.split("]")[0].strip()
             if entity and entity not in preds:
                 preds.append(entity)
 
