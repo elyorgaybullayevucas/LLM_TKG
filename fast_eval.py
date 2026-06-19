@@ -1,7 +1,6 @@
 """Fast eval: standard model.generate() with beam search. Hits@1/3/10."""
 
 import argparse
-import os
 import re
 from pathlib import Path
 
@@ -19,8 +18,11 @@ def load_model(model_name, lora_ckpt, bit8=False):
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name, device_map="auto", trust_remote_code=True, torch_dtype=torch.float16)
-    if lora_ckpt:
+    if lora_ckpt and Path(lora_ckpt).exists():
+        print(f"Loading LoRA from {lora_ckpt}")
         model = PeftModel.from_pretrained(model, lora_ckpt)
+    else:
+        print(f"[WARN] LoRA checkpoint not found: {lora_ckpt}")
     model.eval()
     return model
 
@@ -36,21 +38,26 @@ def read_answers(path):
         for line in f:
             parts = line.strip().split("\t")
             if len(parts) > 2:
-                ans.append(parts[2].strip().lower())
+                ans.append(parts[2].strip())
     return ans
 
 
-def extract_entity(text, prompt):
-    text = text[len(prompt):].strip()
-    text = text.split("</s>")[0].split("\n")[0].strip()
-    # remove id prefix like "123.EntityName"
-    m = re.match(r"^\d+\.(.*)", text)
+def extract_entity(decoded):
+    # after [/INST], take the generated part
+    if "[/INST]" in decoded:
+        gen = decoded.split("[/INST]")[-1].strip()
+    else:
+        gen = decoded.strip()
+    # remove </s> and anything after
+    gen = gen.split("</s>")[0].strip()
+    # remove id prefix "123.EntityName"
+    m = re.match(r"^\d+\.(.*)", gen)
     if m:
-        text = m.group(1).strip()
-    return text.lower()
+        gen = m.group(1).strip()
+    return gen
 
 
-def eval_model(model, tokenizer, tests, answers, max_new_tokens=30, num_beams=10, limit=None):
+def eval_model(model, tokenizer, tests, answers, max_new_tokens=30, num_beams=10, limit=None, debug=5):
     ins = ("<s>[INST] <<SYS>> You must be able to correctly predict the next "
            "{object_label} from a given text consisting of multiple quadruplets "
            "in the form of \"{time}:[{subject}, {relation}, {object_label}.{object}]\" "
@@ -62,7 +69,7 @@ def eval_model(model, tokenizer, tests, answers, max_new_tokens=30, num_beams=10
 
     for i in tqdm(range(n)):
         prompt = ins + tests[i] + "[/INST]"
-        gt = answers[i]
+        gt = answers[i].strip()
 
         enc = tokenizer(prompt, return_tensors="pt",
                         truncation=True, max_length=1024).to(model.device)
@@ -79,20 +86,28 @@ def eval_model(model, tokenizer, tests, answers, max_new_tokens=30, num_beams=10
 
         preds = []
         for seq in out:
-            decoded = tokenizer.decode(seq, skip_special_tokens=True)
-            entity = extract_entity(decoded, prompt.replace("<s>", "").replace("[INST]", "").strip())
-            if entity not in preds:
+            decoded = tokenizer.decode(seq, skip_special_tokens=False)
+            entity = extract_entity(decoded)
+            if entity and entity not in preds:
                 preds.append(entity)
 
-        if gt in preds[:1]:  c1 += 1
-        if gt in preds[:3]:  c3 += 1
-        if gt in preds[:10]: c10 += 1
+        # debug first few
+        if i < debug:
+            print(f"\n--- Sample {i} ---")
+            print(f"GT: {gt}")
+            print(f"Top-3 preds: {preds[:3]}")
+
+        gt_lower = gt.lower()
+        preds_lower = [p.lower() for p in preds]
+
+        if gt_lower in preds_lower[:1]:  c1 += 1
+        if gt_lower in preds_lower[:3]:  c3 += 1
+        if gt_lower in preds_lower[:10]: c10 += 1
 
     print(f"\n=== Results ({n} samples) ===")
     print(f"Hits@1 : {c1/n*100:.2f}%  ({c1}/{n})")
     print(f"Hits@3 : {c3/n*100:.2f}%  ({c3}/{n})")
     print(f"Hits@10: {c10/n*100:.2f}%  ({c10}/{n})")
-    return c1/n, c3/n, c10/n
 
 
 def main():
@@ -115,17 +130,16 @@ def main():
     lora_ckpt = str(Path(args.model_dir) /
                     f"{ds}_{args.model}_infonce_{args.retrieve_type}" / "model_final")
 
-    print(f"Model: {args.model_path}")
-    print(f"LoRA : {lora_ckpt}")
-
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    model = load_model(args.model_path, lora_ckpt if Path(lora_ckpt).exists() else "", args.bit8)
-
+    model = load_model(args.model_path, lora_ckpt, args.bit8)
     tests   = read_tests(test_file)
     answers = read_answers(ans_file)
+
+    # print a few raw answers to check format
+    print(f"\nSample answers: {answers[:5]}")
 
     eval_model(model, tokenizer, tests, answers,
                num_beams=args.num_beams, limit=args.limit)
