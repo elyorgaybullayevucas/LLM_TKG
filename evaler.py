@@ -548,7 +548,8 @@ class Evaler:
                 synced_gpus = False
 
         # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
-        model_instance._validate_model_class()
+        if hasattr(model_instance, '_validate_model_class'):
+            model_instance._validate_model_class()
 
         # priority: `generation_config` argument > `model.generation_config` (the default generation config)
         if generation_config is None:
