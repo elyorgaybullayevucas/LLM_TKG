@@ -24,9 +24,15 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 # from transformers.integrations import deepspeed
 from transformers.utils import logging
 from transformers.generation.configuration_utils import GenerationConfig
-from transformers.generation.utils import (
-    GreedySearchEncoderDecoderOutput, 
-    GreedySearchDecoderOnlyOutput, 
+try:
+    from transformers.generation.utils import (
+        GreedySearchEncoderDecoderOutput,
+        GreedySearchDecoderOnlyOutput,
+    )
+except ImportError:
+    from transformers.generation.utils import (
+        GenerateEncoderDecoderOutput as GreedySearchEncoderDecoderOutput,
+        GenerateDecoderOnlyOutput as GreedySearchDecoderOnlyOutput,
     )
 from transformers.generation.logits_process import LogitsProcessorList
 from tqdm import tqdm
