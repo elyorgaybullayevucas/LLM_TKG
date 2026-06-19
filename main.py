@@ -330,7 +330,7 @@ def stage_eval(args, cfg, checkpoint_dir=None):
                       torch.tensor([4638],  device="cuda:0"),
                       torch.tensor([29871], device="cuda:0")]
 
-    evaler = Evaler(topk=10, tests=tests, test_ans=test_ans,
+    evaler = Evaler(topk=1, tests=tests, test_ans=test_ans,
                     eval_txt_path=metric_file, args=ea,
                     model=model, tokenizer=tokenizer,
                     patterns=patterns, early_stop_chars=stop_chars,
