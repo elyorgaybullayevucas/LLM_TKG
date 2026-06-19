@@ -715,7 +715,7 @@ class Evaler:
             generation_config=generation_config, stopping_criteria=stopping_criteria
         )
 
-        if generation_config.num_return_sequences > 1:
+        if (generation_config.num_return_sequences or 1) > 1:
             raise ValueError(
                 "num_return_sequences has to be 1 when doing greedy search, "
                 f"but is {generation_config.num_return_sequences}."
