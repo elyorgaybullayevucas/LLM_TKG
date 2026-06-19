@@ -1,6 +1,7 @@
 """Fast eval: standard model.generate() with beam search. Hits@1/3/10."""
 
 import argparse
+import json
 import re
 from pathlib import Path
 
@@ -32,14 +33,27 @@ def read_tests(path):
         return [s.strip() for s in f.read().split("\n\n") if s.strip()]
 
 
-def read_answers(path):
+def read_answers(path, entity2id=None):
     ans = []
     with open(path, encoding="utf-8") as f:
         for line in f:
             parts = line.strip().split("\t")
             if len(parts) > 2:
-                ans.append(parts[2].strip())
+                name = parts[2].strip()
+                if entity2id:
+                    eid = entity2id.get(name, "0")
+                    ans.append(f"{eid}.{name}".lower())
+                else:
+                    ans.append(name.lower())
     return ans
+
+
+def load_entity2id(data_root, dataset):
+    path = Path(data_root) / dataset / "processed" / "entity2id.json"
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
 
 
@@ -133,10 +147,10 @@ def main():
     tokenizer.padding_side = "left"
 
     model = load_model(args.model_path, lora_ckpt, args.bit8)
-    tests   = read_tests(test_file)
-    answers = read_answers(ans_file)
+    tests     = read_tests(test_file)
+    entity2id = load_entity2id(args.data_root, args.dataset)
+    answers   = read_answers(ans_file, entity2id)
 
-    # print a few raw answers to check format
     print(f"\nSample answers: {answers[:5]}")
 
     eval_model(model, tokenizer, tests, answers,
