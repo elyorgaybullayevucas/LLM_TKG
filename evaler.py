@@ -1284,7 +1284,7 @@ class Evaler:
         #preprocess multiple answers
         dict_qu_ans = self.gen_set_ans(dir_full_test=self.args.fulltest, dir_time2id=self.args.time2id)
         set_checked_qu = set()
-        num_infer = len(self.tests) #
+        num_infer = min(len(self.tests), cnt + 500)
         for i in tqdm(range(cnt, num_infer)):  # cnt, len(self.tests[:-1])
             his_query = self.tests[i]
             query = his_query.split('\n')[-1]
