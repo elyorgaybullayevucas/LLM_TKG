@@ -273,13 +273,13 @@ def stage_eval(args, cfg, checkpoint_dir=None):
 
     proc = Path(args.data_root) / args.dataset / "processed"
     ds_lower = args.dataset.lower()
-    input_file   = str(proc / f"history_facts_{ds_lower}_{args.retrieve_type}.txt")
-    ans_file     = str(proc / f"test_ans_{ds_lower}.txt")
-    output_file  = str(Path(args.output_dir) /
+    _input_file   = str(proc / f"history_facts_{ds_lower}_{args.retrieve_type}.txt")
+    _ans_file     = str(proc / f"test_ans_{ds_lower}.txt")
+    _output_file  = str(Path(args.output_dir) /
                        f"{ds_lower}_{args.model}_infonce_{args.retrieve_type}" /
                        "final.txt")
-    metric_file  = str(Path(output_file).parent / "metric_results.txt")
-    os.makedirs(Path(output_file).parent, exist_ok=True)
+    metric_file  = str(Path(_output_file).parent / "metric_results.txt")
+    os.makedirs(Path(_output_file).parent, exist_ok=True)
 
     class EvalArgs:
         MODEL_NAME            = model_name
@@ -289,9 +289,9 @@ def stage_eval(args, cfg, checkpoint_dir=None):
         CONTEXT_LEN           = 4096
         TEMPERATURE           = 0
         PROMPT                = ""
-        input_file            = input_file
-        output_file           = output_file
-        test_ans_file         = ans_file
+        input_file            = _input_file
+        output_file           = _output_file
+        test_ans_file         = _ans_file
         fulltest              = ""
         time2id               = ""
         begin                 = 0
