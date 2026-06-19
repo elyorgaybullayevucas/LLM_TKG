@@ -91,9 +91,16 @@ def eval_model(model, tokenizer, tests, answers, max_new_tokens=30, num_beams=10
         gt_lower = gt.lower()
         preds_lower = [p.lower() for p in preds]
 
-        if gt_lower in preds_lower[:1]:  c1 += 1
-        if gt_lower in preds_lower[:3]:  c3 += 1
-        if gt_lower in preds_lower[:10]: c10 += 1
+        # exact match OR substring match (model may output "ID.EntityName]")
+        def matches(gt, pred_list, k):
+            for p in pred_list[:k]:
+                if gt in p or p in gt:
+                    return True
+            return False
+
+        if matches(gt_lower, preds_lower, 1):  c1 += 1
+        if matches(gt_lower, preds_lower, 3):  c3 += 1
+        if matches(gt_lower, preds_lower, 10): c10 += 1
 
     print(f"\n=== Results ({n} samples) ===")
     print(f"Hits@1 : {c1/n*100:.2f}%  ({c1}/{n})")
