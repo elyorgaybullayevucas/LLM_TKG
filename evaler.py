@@ -703,6 +703,14 @@ class Evaler:
         )
 
         # 9. prepare stopping criteria
+        if not hasattr(generation_config, '_eos_token_tensor'):
+            eos = generation_config.eos_token_id
+            if eos is None:
+                generation_config._eos_token_tensor = None
+            elif isinstance(eos, int):
+                generation_config._eos_token_tensor = torch.tensor([eos])
+            else:
+                generation_config._eos_token_tensor = torch.tensor(eos)
         stopping_criteria = model_instance._get_stopping_criteria(
             generation_config=generation_config, stopping_criteria=stopping_criteria
         )
