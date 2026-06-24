@@ -4,6 +4,10 @@ data/
 # ── Model checkpoints & outputs ──────────────────────────────────────────────
 model/
 output/
+checkpoints/
+logs/
+results/
+*.jsonl
 
 # ── Python cache ──────────────────────────────────────────────────────────────
 __pycache__/
