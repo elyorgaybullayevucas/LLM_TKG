@@ -12,20 +12,20 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
     "ICEWS18": {
         # model
         "embed_dim":         256,
-        "k_neighbors":       48,    # more neighbors → stronger R-GAT
+        "k_neighbors":       32,
         "short_len":         5,
-        "long_len":          30,
+        "long_len":          20,    # 30→20: memory safe on A100
         "rgat_layers":       2,
         "num_heads":         4,
         "dropout":           0.2,
         # copy
         "copy_lambda":       0.5,
         "use_entity_copy":   True,
-        "recency_steps":     2,     # last 2 snapshots → recency burst
+        "recency_steps":     2,
         "recency_boost":     4.0,
         # training
         "epochs":            50,
-        "batch_size":        512,
+        "batch_size":        256,   # 512→256: memory safe
         "lr":                5e-4,
         "alpha_infonce":     0.5,
         "infonce_temp":      0.07,
@@ -71,9 +71,9 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
     "GDELT": {
         "embed_dim":         256,
-        "k_neighbors":       48,
+        "k_neighbors":       32,
         "short_len":         5,
-        "long_len":          30,
+        "long_len":          20,
         "rgat_layers":       2,
         "num_heads":         4,
         "dropout":           0.2,
@@ -82,7 +82,7 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
         "recency_steps":     2,
         "recency_boost":     4.0,
         "epochs":            40,
-        "batch_size":        512,
+        "batch_size":        256,
         "lr":                5e-4,
         "alpha_infonce":     0.5,
         "infonce_temp":      0.07,
