@@ -103,6 +103,7 @@ class TREAConfig:
     # ── Misc ─────────────────────────────────────────────────────────────────
     seed: int = 42
     device: str = "cuda"
+    gpu: int = 1          # GPU index (nvidia-smi: 1 and 2 have most free VRAM)
     save_dir: str = "checkpoints"
     log_dir: str = "logs"
 
@@ -132,6 +133,7 @@ def parse_args() -> TREAConfig:
     p.add_argument("--eval_every",        type=int,   default=1)
     p.add_argument("--seed",              type=int,   default=42)
     p.add_argument("--device",            type=str,   default="cuda")
+    p.add_argument("--gpu",               type=int,   default=1)
     p.add_argument("--save_dir",          type=str,   default="checkpoints")
     p.add_argument("--log_dir",           type=str,   default="logs")
     p.add_argument("--no_inverse",        dest="use_inverse",

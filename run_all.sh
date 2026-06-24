@@ -1,59 +1,35 @@
 #!/bin/bash
 # Train TREA-TKG on all three datasets sequentially.
+# GPU 1 and 2 have the most free VRAM (~37GB each).
+# Change GPU=1 to GPU=2 to use the second free GPU.
 
 set -e
 
-DATA_DIR="C:/Users/elyor/OneDrive/Рабочий стол/data_extracted/data"
-DEVICE="cuda"   # change to "cpu" if no GPU
+GPU=1        # GPU index to use (1 or 2 recommended)
+DATA_DIR="./data"
 
 echo "=========================================="
 echo "  TREA-TKG — Training all 3 datasets"
+echo "  GPU: $GPU  |  data: $DATA_DIR"
 echo "=========================================="
 
-# ICEWS18
+# ICEWS18  (256-dim, 10 history steps, 50 epochs)
 python train_trea.py \
   --dataset ICEWS18 \
   --data_dir "$DATA_DIR" \
-  --embed_dim 256 \
-  --history_len 10 \
-  --num_heads 4 \
-  --epochs 50 \
-  --batch_size 1024 \
-  --lr 1e-3 \
-  --alpha_contrastive 0.3 \
-  --device $DEVICE \
-  --save_dir checkpoints \
-  --log_dir logs
+  --gpu $GPU
 
-# YAGO
+# YAGO  (128-dim, 15 history steps, 30 epochs)
 python train_trea.py \
   --dataset YAGO \
   --data_dir "$DATA_DIR" \
-  --embed_dim 128 \
-  --history_len 15 \
-  --num_heads 4 \
-  --epochs 30 \
-  --batch_size 1024 \
-  --lr 2e-3 \
-  --alpha_contrastive 0.2 \
-  --device $DEVICE \
-  --save_dir checkpoints \
-  --log_dir logs
+  --gpu $GPU
 
-# WIKI
+# WIKI  (256-dim, 12 history steps, 40 epochs)
 python train_trea.py \
   --dataset WIKI \
   --data_dir "$DATA_DIR" \
-  --embed_dim 256 \
-  --history_len 12 \
-  --num_heads 4 \
-  --epochs 40 \
-  --batch_size 1024 \
-  --lr 1e-3 \
-  --alpha_contrastive 0.3 \
-  --device $DEVICE \
-  --save_dir checkpoints \
-  --log_dir logs
+  --gpu $GPU
 
 echo ""
 echo "All done! Results saved in checkpoints/"

@@ -55,9 +55,14 @@ class TREATrainer:
 
         # device
         use_cuda = cfg.device == "cuda" and torch.cuda.is_available()
-        self.device = torch.device("cuda" if use_cuda else "cpu")
-        gpu_info = torch.cuda.get_device_name(0) if use_cuda else "CPU"
-        print(f"[Device] {gpu_info}")
+        if use_cuda:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.gpu)
+            self.device = torch.device("cuda:0")   # always 0 after masking
+            gpu_info = torch.cuda.get_device_name(0)
+            print(f"[Device] GPU {cfg.gpu} — {gpu_info}")
+        else:
+            self.device = torch.device("cpu")
+            print("[Device] CPU")
 
         # data
         self.loader = TKGDataLoader(cfg)
