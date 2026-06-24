@@ -1,9 +1,9 @@
 """
-Loss functions for TREA-TKG.
+AURORA-TKG loss functions.
 
-  LabelSmoothingCE     — 1-vs-N softmax with label smoothing
-  HardNegativeTriplet  — in-batch hard-negative contrastive loss
-  TREALoss             — combined: L = L_CE + α * L_triplet
+  LabelSmoothingCE  — 1-vs-N softmax with label smoothing
+  InfoNCELoss       — in-batch contrastive (stronger than triplet)
+  AURORALoss        — CE + α * InfoNCE
 """
 import torch
 import torch.nn as nn
@@ -11,65 +11,70 @@ import torch.nn.functional as F
 
 
 class LabelSmoothingCE(nn.Module):
+    """
+    1-vs-N cross-entropy with label smoothing.
+    """
     def __init__(self, smoothing: float = 0.1):
         super().__init__()
-        self.smoothing   = smoothing
-        self.confidence  = 1.0 - smoothing
+        self.smoothing  = smoothing
+        self.confidence = 1.0 - smoothing
 
     def forward(self, logits: torch.Tensor,
                 targets: torch.Tensor) -> torch.Tensor:
-        """logits (B, N),  targets (B,) → scalar loss"""
-        log_p  = F.log_softmax(logits, dim=-1)                    # (B, N)
-        nll    = -log_p.gather(1, targets.unsqueeze(1)).squeeze(1)# (B,)
-        smooth = -log_p.mean(dim=-1)                              # (B,)
+        """logits (B, N), targets (B,) → scalar"""
+        log_p  = F.log_softmax(logits, dim=-1)
+        nll    = -log_p.gather(1, targets.unsqueeze(1)).squeeze(1)
+        smooth = -log_p.mean(dim=-1)
         return (self.confidence * nll + self.smoothing * smooth).mean()
 
 
-class HardNegativeTriplet(nn.Module):
+class InfoNCELoss(nn.Module):
     """
-    In-batch hard negative mining.
-    For each query, the hardest negative is the highest-scoring
-    wrong entity in the batch's logits.
+    InfoNCE with in-batch negatives.
+    With batch_size=512 this gives 511 negatives — much denser
+    training signal than margin-based triplet loss.
     """
-    def __init__(self, margin: float = 2.0):
+    def __init__(self, temperature: float = 0.07):
         super().__init__()
-        self.margin = margin
-
-    def forward(self, query_repr: torch.Tensor,
-                pos_emb: torch.Tensor,
-                neg_emb: torch.Tensor) -> torch.Tensor:
-        d_pos = ((query_repr - pos_emb) ** 2).sum(-1)   # (B,)
-        d_neg = ((query_repr - neg_emb) ** 2).sum(-1)
-        return F.relu(d_pos - d_neg + self.margin).mean()
-
-
-class TREALoss(nn.Module):
-    def __init__(self, smoothing: float = 0.1,
-                 alpha: float = 0.3, margin: float = 2.0):
-        super().__init__()
-        self.ce      = LabelSmoothingCE(smoothing)
-        self.triplet = HardNegativeTriplet(margin)
-        self.alpha   = alpha
+        self.tau = temperature
 
     def forward(
         self,
-        logits: torch.Tensor,         # (B, N)
-        targets: torch.Tensor,        # (B,)
-        query_repr: torch.Tensor,     # (B, d)
-        ent_emb: nn.Embedding,
+        query_repr: torch.Tensor,   # (B, d)
+        pos_emb:    torch.Tensor,   # (B, d)
+    ) -> torch.Tensor:
+        q = F.normalize(query_repr, dim=-1)
+        k = F.normalize(pos_emb,    dim=-1)
+        logits = torch.mm(q, k.t()) / self.tau          # (B, B)
+        labels = torch.arange(logits.size(0), device=q.device)
+        return F.cross_entropy(logits, labels)
+
+
+class AURORALoss(nn.Module):
+    """Total = CE_label_smooth + α * InfoNCE"""
+
+    def __init__(self, smoothing: float = 0.1,
+                 alpha: float = 0.5, temperature: float = 0.07):
+        super().__init__()
+        self.alpha   = alpha
+        self.ce      = LabelSmoothingCE(smoothing)
+        self.infonce = InfoNCELoss(temperature)
+
+    def forward(
+        self,
+        logits:     torch.Tensor,   # (B, N)
+        targets:    torch.Tensor,   # (B,)
+        query_repr: torch.Tensor,   # (B, d)
+        ent_emb:    nn.Embedding,
     ) -> dict:
-        ce_loss = self.ce(logits, targets)
+        ce_loss      = self.ce(logits, targets)
+        pos_emb      = ent_emb(targets)
+        infonce_loss = self.infonce(query_repr, pos_emb)
 
-        # pick hardest negative per query from logit scores
-        logits_neg = logits.clone()
-        logits_neg.scatter_(1, targets.unsqueeze(1), float("-inf"))
-        neg_ids    = logits_neg.argmax(dim=-1)              # (B,)
-
-        pos_emb = ent_emb(targets)
-        neg_emb = ent_emb(neg_ids)
-        tri_loss = self.triplet(query_repr, pos_emb, neg_emb)
-
-        total = ce_loss + self.alpha * tri_loss
-        return {"total": total,
-                "ce": ce_loss.item(),
-                "triplet": tri_loss.item()}
+        total = ce_loss + self.alpha * infonce_loss
+        return {
+            "_total":  total,
+            "total":   total.item(),
+            "ce":      ce_loss.item(),
+            "infonce": infonce_loss.item(),
+        }

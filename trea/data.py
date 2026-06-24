@@ -1,19 +1,22 @@
 """
-Data loading, graph indexing, and PyTorch Dataset for TREA-TKG.
+Data loading and graph indexing for AURORA-TKG.
 
 Quadruple format (whitespace-separated):
     sub_id  rel_id  obj_id  timestamp  [0]
 
-Supports ICEWS18 (step=24), YAGO (step=1), WIKI (step=1).
+New additions vs TREA-TKG:
+  - build_neighborhood_batch(): R-GAT neighborhood tensors
+  - entity copy scores: (s, any_r, o, <t) co-occurrence signal
 """
 import os
+import random
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 
-from trea.config import TREAConfig
+from trea.config import AURORAConfig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -37,16 +40,17 @@ def get_dataset_step(dataset: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Graph Index  (built once, shared across train / valid / test)
+# Graph Index
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GraphIndex:
     """
-    Pre-built look-up structures over ALL known quadruples:
+    Pre-built look-up structures:
 
-    a) all_answers[(s, r, t)]  → set of true objects   (for filtered eval)
-    b) _by_time_sub[(t, s)]    → list[(rel, obj, time)] (history retrieval)
-    c) _sro_times[(s, r, o)]   → sorted list of t       (copy score)
+    a) all_answers[(s, r, t)]    → set of true objects (filtered eval)
+    b) _by_time_sub[(t, s)]      → list[(rel, obj, time)] (neighborhood)
+    c) _sro_times[(s, r, o)]     → sorted list of t (relation copy)
+    d) _by_sub[s]                → list[(o, last_t, count)] (entity copy)
     """
 
     def __init__(self, quads_all: np.ndarray, step: int = 1):
@@ -57,13 +61,13 @@ class GraphIndex:
         for s, r, o, t in quads_all:
             self.all_answers[(int(s), int(r), int(t))].add(int(o))
 
-        # history index: (time, subject) → facts
-        self._by_time_sub: Dict[Tuple[int, int], List[Tuple[int, int, int]]] = \
+        # history / neighborhood index: (time, subject) → facts
+        self._by_time_sub: Dict[Tuple[int, int], List[Tuple[int, int]]] = \
             defaultdict(list)
         for s, r, o, t in quads_all:
-            self._by_time_sub[(int(t), int(s))].append((int(r), int(o), int(t)))
+            self._by_time_sub[(int(t), int(s))].append((int(r), int(o)))
 
-        # copy counter: (s, r, o) → sorted timestamps
+        # relation copy: (s, r, o) → sorted timestamps
         self._sro_times: Dict[Tuple[int, int, int], List[int]] = \
             defaultdict(list)
         for s, r, o, t in quads_all:
@@ -71,47 +75,90 @@ class GraphIndex:
         for key in self._sro_times:
             self._sro_times[key].sort()
 
-    # ── history retrieval ─────────────────────────────────────────────────────
+        # entity copy: s → {o: (last_t_before_any_t, total_count_before_any_t)}
+        # We store the raw list and compute at query time for correct filtering.
+        self._by_sub: Dict[int, List[Tuple[int, int, int]]] = defaultdict(list)
+        for s, r, o, t in quads_all:
+            self._by_sub[int(s)].append((int(o), int(t), int(r)))
 
-    def get_history(self, sub: int, query_time: int,
-                    history_len: int) -> List[Tuple[int, int, int]]:
-        """
-        Return facts for subject=sub in window [query_time - history_len*step, query_time).
-        Sorted newest-first.  Caps at history_len × 10 facts.
-        """
-        facts: List[Tuple[int, int, int]] = []
-        t = query_time - self.step
-        steps_back = 0
-        while steps_back < history_len and t >= 0:
-            facts.extend(self._by_time_sub.get((t, sub), []))
-            t -= self.step
-            steps_back += 1
-        facts.sort(key=lambda x: -x[2])
-        return facts[:history_len * 10]
+    # ── relation copy score vector ─────────────────────────────────────────────
 
-    # ── copy score vector ─────────────────────────────────────────────────────
-
-    def get_copy_counts(self, sub: int, rel: int, query_time: int,
-                        num_entities: int, copy_lambda: float,
-                        step: int) -> np.ndarray:
-        """
-        copy[o] = log(1 + count(s,r,o, <t))
-                × exp(−λ × (query_time − last_seen) / step)
-
-        Novel: rare (s,r,o) patterns receive relative boost via log scaling.
-        """
+    def get_rel_copy_scores(self, sub: int, rel: int, query_time: int,
+                            num_entities: int, copy_lambda: float) -> np.ndarray:
+        """copy[o] = log(1+count) × exp(−λ × (t − last_t) / step)"""
         scores = np.zeros(num_entities, dtype=np.float32)
+        step = max(self.step, 1)
         for (s_, r_, o_), times in self._sro_times.items():
             if s_ != sub or r_ != rel:
                 continue
-            count = sum(1 for tt in times if tt < query_time)
-            if count == 0:
+            ts = [tt for tt in times if tt < query_time]
+            if not ts:
                 continue
-            last_t = max(tt for tt in times if tt < query_time)
-            recency = np.exp(-copy_lambda * (query_time - last_t) / max(step, 1))
+            count  = len(ts)
+            last_t = max(ts)
+            decay  = np.exp(-copy_lambda * (query_time - last_t) / step)
             if o_ < num_entities:
-                scores[o_] = np.log1p(count) * recency
+                scores[o_] = np.log1p(count) * decay
         return scores
+
+    # ── entity copy score vector ───────────────────────────────────────────────
+
+    def get_ent_copy_scores(self, sub: int, query_time: int,
+                            num_entities: int, copy_lambda: float) -> np.ndarray:
+        """
+        ent_copy[o] = log(1+count(s,*,o,<t)) × exp(−λ × Δt_last / step)
+        Any relation between s and o counts.
+        """
+        scores  = np.zeros(num_entities, dtype=np.float32)
+        step    = max(self.step, 1)
+        by_obj: Dict[int, List[int]] = defaultdict(list)
+        for o, t, _ in self._by_sub.get(sub, []):
+            if t < query_time:
+                by_obj[o].append(t)
+        for o, ts in by_obj.items():
+            if o >= num_entities:
+                continue
+            last_t = max(ts)
+            decay  = np.exp(-copy_lambda * (query_time - last_t) / step)
+            scores[o] = np.log1p(len(ts)) * decay
+        return scores
+
+    # ── neighborhood for R-GAT ────────────────────────────────────────────────
+
+    def get_snapshot_neighbors(
+        self, sub: int, query_time: int, long_len: int, k_neighbors: int,
+        rng: random.Random,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        For entity `sub`, build neighbor tensors over last `long_len` snapshots.
+
+        Returns:
+            neigh_ents  (long_len, k_neighbors) int32 — entity IDs (0 = pad)
+            neigh_rels  (long_len, k_neighbors) int32 — relation IDs
+            neigh_mask  (long_len, k_neighbors) bool
+        """
+        H, K = long_len, k_neighbors
+        neigh_ents = np.zeros((H, K), dtype=np.int32)
+        neigh_rels = np.zeros((H, K), dtype=np.int32)
+        neigh_mask = np.zeros((H, K), dtype=bool)
+
+        t = query_time - self.step
+        for h in range(H):
+            if t < 0:
+                break
+            facts = self._by_time_sub.get((t, sub), [])
+            if facts:
+                if len(facts) > K:
+                    chosen = rng.sample(facts, K)
+                else:
+                    chosen = facts
+                for k, (r, o) in enumerate(chosen):
+                    neigh_ents[h, k] = o
+                    neigh_rels[h, k] = r
+                    neigh_mask[h, k] = True
+            t -= self.step
+
+        return neigh_ents, neigh_rels, neigh_mask
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,10 +192,11 @@ class TKGDataset(Dataset):
 class TKGDataLoader:
     """Loads all splits, builds GraphIndex, exposes Dataset objects."""
 
-    def __init__(self, cfg: TREAConfig):
-        self.cfg = cfg
-        base = os.path.join(cfg.data_dir, cfg.dataset)
+    def __init__(self, cfg: AURORAConfig):
+        self.cfg  = cfg
+        base      = os.path.join(cfg.data_dir, cfg.dataset)
         self.step = get_dataset_step(cfg.dataset)
+        self._rng = random.Random(cfg.seed)
 
         train_q = load_quadruples(os.path.join(base, "train.txt"))
         valid_q = load_quadruples(os.path.join(base, "valid.txt"))
@@ -174,46 +222,65 @@ class TKGDataLoader:
             f"step={self.step}"
         )
 
-    # ── batch builders ────────────────────────────────────────────────────────
+    # ── R-GAT neighborhood batch ──────────────────────────────────────────────
 
-    def build_history_batch(
+    def build_neighborhood_batch(
         self,
-        subs: List[int], rels: List[int], times: List[int], max_hist: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor]:
+        subs: List[int],
+        times: List[int],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Returns padded tensors:
-            hist_rels  (B, L)   – relation ids
-            hist_objs  (B, L)   – object ids
-            hist_times (B, L)   – raw timestamps
-            hist_mask  (B, L)   – True = valid position
+        Build padded neighbor tensors for a batch of (sub, time) pairs.
+
+        Returns:
+            neigh_ents  (B, H, K)  long  — entity IDs
+            neigh_rels  (B, H, K)  long  — relation IDs
+            neigh_mask  (B, H, K)  bool  — validity mask
         """
-        B = len(subs)
-        L = max_hist * 10  # max facts per query
+        cfg = self.cfg
+        B   = len(subs)
+        H   = cfg.long_len
+        K   = cfg.k_neighbors
 
-        h_rels  = torch.zeros(B, L, dtype=torch.long)
-        h_objs  = torch.zeros(B, L, dtype=torch.long)
-        h_times = torch.zeros(B, L, dtype=torch.long)
-        h_mask  = torch.zeros(B, L, dtype=torch.bool)
+        ne = np.zeros((B, H, K), dtype=np.int32)
+        nr = np.zeros((B, H, K), dtype=np.int32)
+        nm = np.zeros((B, H, K), dtype=bool)
 
-        for i, (s, r, t) in enumerate(zip(subs, rels, times)):
-            facts = self.index.get_history(s, t, max_hist)
-            for j, (fr, fo, ft) in enumerate(facts[:L]):
-                h_rels[i, j]  = fr
-                h_objs[i, j]  = fo
-                h_times[i, j] = ft
-                h_mask[i, j]  = True
+        for i, (s, t) in enumerate(zip(subs, times)):
+            ne[i], nr[i], nm[i] = self.index.get_snapshot_neighbors(
+                s, t, H, K, self._rng
+            )
 
-        return h_rels, h_objs, h_times, h_mask
+        return (torch.from_numpy(ne).long(),
+                torch.from_numpy(nr).long(),
+                torch.from_numpy(nm))
 
-    def get_copy_scores_batch(
+    # ── copy score batch ──────────────────────────────────────────────────────
+
+    def get_rel_copy_batch(
         self, subs: List[int], rels: List[int], times: List[int],
     ) -> torch.Tensor:
-        """Return (B, num_entities) float32 copy score matrix."""
+        """Return (B, num_entities) float32 relation-copy score matrix."""
         B = len(subs)
-        scores = torch.zeros(B, self.num_entities, dtype=torch.float32)
+        out = torch.zeros(B, self.num_entities, dtype=torch.float32)
         for i, (s, r, t) in enumerate(zip(subs, rels, times)):
-            sc = self.index.get_copy_counts(
-                s, r, t, self.num_entities, self.cfg.copy_lambda, self.step
+            sc = self.index.get_rel_copy_scores(
+                s, r, t, self.num_entities, self.cfg.copy_lambda
             )
-            scores[i] = torch.from_numpy(sc)
-        return scores
+            out[i] = torch.from_numpy(sc)
+        return out
+
+    def get_ent_copy_batch(
+        self, subs: List[int], times: List[int],
+    ) -> torch.Tensor:
+        """Return (B, num_entities) float32 entity-copy score matrix."""
+        B = len(subs)
+        out = torch.zeros(B, self.num_entities, dtype=torch.float32)
+        if not self.cfg.use_entity_copy:
+            return out
+        for i, (s, t) in enumerate(zip(subs, times)):
+            sc = self.index.get_ent_copy_scores(
+                s, t, self.num_entities, self.cfg.copy_lambda
+            )
+            out[i] = torch.from_numpy(sc)
+        return out
