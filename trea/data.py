@@ -67,13 +67,18 @@ class GraphIndex:
         for s, r, o, t in quads_all:
             self._by_time_sub[(int(t), int(s))].append((int(r), int(o)))
 
-        # relation copy: (s, r, o) → sorted timestamps
-        self._sro_times: Dict[Tuple[int, int, int], List[int]] = \
-            defaultdict(list)
+        # relation copy: (s, r) → {o: sorted_timestamps}
+        # O(1) lookup instead of O(all_triples) scan
+        _sro_raw: Dict[Tuple[int, int, int], List[int]] = defaultdict(list)
         for s, r, o, t in quads_all:
-            self._sro_times[(int(s), int(r), int(o))].append(int(t))
-        for key in self._sro_times:
-            self._sro_times[key].sort()
+            _sro_raw[(int(s), int(r), int(o))].append(int(t))
+        for key in _sro_raw:
+            _sro_raw[key].sort()
+
+        self._sr_objs: Dict[Tuple[int, int], Dict[int, List[int]]] = \
+            defaultdict(dict)
+        for (s, r, o), times in _sro_raw.items():
+            self._sr_objs[(s, r)][o] = times
 
         # entity copy: s → {o: (last_t_before_any_t, total_count_before_any_t)}
         # We store the raw list and compute at query time for correct filtering.
@@ -89,17 +94,14 @@ class GraphIndex:
                             recency_boost: float = 5.0) -> np.ndarray:
         """
         copy[o] = log(1+count) × exp(−λ × (t − last_t) / step)
-
-        Recency burst: if (s,r,o) appeared in the last `recency_steps`
-        snapshots, multiply score by `recency_boost`.
-        This is the dominant signal on WIKI/YAGO where facts repeat.
+        O(|neighbors of (s,r)|) — not O(all triples).
+        Recency burst: × recency_boost if within last recency_steps snapshots.
         """
         scores = np.zeros(num_entities, dtype=np.float32)
         step   = max(self.step, 1)
         recency_threshold = recency_steps * step
-        for (s_, r_, o_), times in self._sro_times.items():
-            if s_ != sub or r_ != rel:
-                continue
+
+        for o, times in self._sr_objs.get((sub, rel), {}).items():
             ts = [tt for tt in times if tt < query_time]
             if not ts:
                 continue
@@ -107,11 +109,10 @@ class GraphIndex:
             last_t = max(ts)
             decay  = np.exp(-copy_lambda * (query_time - last_t) / step)
             score  = np.log1p(count) * decay
-            # recency burst
             if (query_time - last_t) <= recency_threshold:
                 score *= recency_boost
-            if o_ < num_entities:
-                scores[o_] = score
+            if o < num_entities:
+                scores[o] = score
         return scores
 
     # ── entity copy score vector ───────────────────────────────────────────────
