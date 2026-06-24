@@ -66,46 +66,36 @@ class TemporalNeighborAttention(nn.Module):
         B, H, K, d = h_neigh.shape
         nh, dh = self.nh, self.dh
         scale  = math.sqrt(dh)
+        BH     = B * H
 
-        # Process one snapshot at a time to avoid B*H*K*d peak allocation.
-        # Each step: (B, K, d) instead of (B*H, K, d) → H× less memory.
-        snap_outputs = []
-        for h_idx in range(H):
-            h_nb   = h_neigh[:, h_idx, :, :]       # (B, K, d)
-            r_nb   = neigh_rels[:, h_idx, :]        # (B, K)
-            m_nb   = neigh_mask[:, h_idx, :]        # (B, K)
+        # Flatten B×H for fully parallel processing.
+        # With pre-computed data (no CPU overhead), GPU stays saturated.
+        r_flat  = neigh_rels.reshape(BH * K)
+        r_bias  = self.W_rel(rel_emb(r_flat)).view(BH, K, d)
+        keys_fl = h_neigh.reshape(BH, K, d) + r_bias          # (BH, K, d)
+        vals_fl = h_neigh.reshape(BH, K, d)
+        mask_fl = neigh_mask.reshape(BH, K)
+        h_s_exp = h_s.unsqueeze(1).expand(B, H, d).reshape(BH, d)
 
-            # relation-biased keys
-            r_bias = self.W_rel(rel_emb(r_nb.reshape(-1)))   # (B*K, d)
-            r_bias = r_bias.view(B, K, d)
-            keys   = h_nb + r_bias                            # (B, K, d)
+        q = self.W_q(h_s_exp).view(BH, 1, nh, dh).transpose(1, 2)
+        k = self.W_k(keys_fl).view(BH, K, nh, dh).transpose(1, 2)
+        v = self.W_v(vals_fl).view(BH, K, nh, dh).transpose(1, 2)
 
-            # multi-head attention
-            q = self.W_q(h_s).view(B, 1, nh, dh).transpose(1, 2)   # (B, nh, 1, dh)
-            k = self.W_k(keys).view(B, K, nh, dh).transpose(1, 2)   # (B, nh, K, dh)
-            v = self.W_v(h_nb).view(B, K, nh, dh).transpose(1, 2)   # (B, nh, K, dh)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / scale         # (BH,nh,1,K)
+        scores = scores.masked_fill(
+            ~mask_fl.unsqueeze(1).unsqueeze(2), float("-inf"))
+        attn = torch.nan_to_num(torch.softmax(scores, dim=-1), nan=0.0)
+        attn = self.drop(attn)
 
-            scores = torch.matmul(q, k.transpose(-2, -1)) / scale    # (B, nh, 1, K)
-            scores = scores.masked_fill(
-                ~m_nb.unsqueeze(1).unsqueeze(2), float("-inf")
-            )
-            attn = torch.softmax(scores, dim=-1)
-            attn = torch.nan_to_num(attn, nan=0.0)
-            attn = self.drop(attn)
+        ctx     = torch.matmul(attn, v).squeeze(2).transpose(1,2).reshape(BH, d)
+        ctx     = self.W_o(ctx)
 
-            ctx     = torch.matmul(attn, v)                           # (B, nh, 1, dh)
-            ctx     = ctx.squeeze(2).transpose(1, 2).reshape(B, d)    # (B, d)
-            ctx     = self.W_o(ctx)
+        all_pad = (~mask_fl).all(dim=-1, keepdim=True).float()
+        h_out   = (1 - all_pad) * ctx + all_pad * h_s_exp
+        h_out   = self.norm1(h_s_exp + h_out)
+        h_out   = self.norm2(h_out + self.ff(h_out))
 
-            # fall back to h_s when all neighbors are padding
-            all_pad = (~m_nb).all(dim=-1, keepdim=True).float()       # (B, 1)
-            h_out   = (1 - all_pad) * ctx + all_pad * h_s
-
-            h_out = self.norm1(h_s + h_out)
-            h_out = self.norm2(h_out + self.ff(h_out))
-            snap_outputs.append(h_out)                                 # (B, d)
-
-        return torch.stack(snap_outputs, dim=1)                        # (B, H, d)
+        return h_out.view(B, H, d)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

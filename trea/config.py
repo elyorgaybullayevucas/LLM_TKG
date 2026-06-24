@@ -10,29 +10,26 @@ DATA_DIR = "./data"
 
 DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
     "ICEWS18": {
-        # model
-        "embed_dim":         256,
+        "embed_dim":         512,
         "k_neighbors":       32,
         "short_len":         5,
-        "long_len":          20,    # 30→20: memory safe on A100
+        "long_len":          20,
         "rgat_layers":       2,
-        "num_heads":         4,
+        "num_heads":         8,
         "dropout":           0.2,
-        # copy
         "copy_lambda":       0.5,
         "use_entity_copy":   True,
         "recency_steps":     2,
         "recency_boost":     4.0,
-        # training
         "epochs":            50,
-        "batch_size":        256,   # 512→256: memory safe
+        "batch_size":        512,
         "lr":                5e-4,
         "alpha_infonce":     0.5,
         "infonce_temp":      0.07,
         "label_smoothing":   0.1,
     },
     "YAGO": {
-        "embed_dim":         256,
+        "embed_dim":         512,
         "k_neighbors":       64,    # YAGO: 10K entity, can afford more
         "short_len":         5,
         "long_len":          30,
@@ -51,7 +48,7 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
         "label_smoothing":   0.05,
     },
     "WIKI": {
-        "embed_dim":         256,
+        "embed_dim":         512,
         "k_neighbors":       64,    # WIKI: 12K entity, can afford more
         "short_len":         5,
         "long_len":          30,
@@ -70,7 +67,7 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
         "label_smoothing":   0.05,
     },
     "GDELT": {
-        "embed_dim":         256,
+        "embed_dim":         512,
         "k_neighbors":       32,
         "short_len":         5,
         "long_len":          20,
@@ -97,7 +94,7 @@ class AURORAConfig:
     dataset:          str   = "ICEWS18"
     data_dir:         str   = DATA_DIR
     # model
-    embed_dim:        int   = 256
+    embed_dim:        int   = 512
     k_neighbors:      int   = 32
     short_len:        int   = 5
     long_len:         int   = 30

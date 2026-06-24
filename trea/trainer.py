@@ -12,7 +12,7 @@ from tqdm import tqdm
 from trea.config import AURORAConfig
 from trea.model import AURORAModel
 from trea.loss import AURORALoss
-from trea.data import TKGDataLoader
+from trea.data import TKGDataLoader, aurora_collate
 from trea.evaluate import evaluate
 
 
@@ -99,9 +99,10 @@ class AURORATrainer:
 
         dl = DataLoader(
             self.loader.train_set, batch_size=cfg.batch_size,
-            shuffle=True, num_workers=0,
+            shuffle=True, num_workers=4,
             pin_memory=(self.device.type == "cuda"),
-            drop_last=True,
+            drop_last=True, collate_fn=aurora_collate,
+            persistent_workers=True,
         )
 
         tot_total = tot_ce = tot_nce = 0.0
@@ -109,19 +110,26 @@ class AURORATrainer:
 
         for batch in tqdm(dl, desc=f" ep{epoch}", leave=False,
                           dynamic_ncols=True):
-            subs, rels, objs, times = [x.to(self.device) for x in batch]
+            (subs, rels, objs, times,
+             ne, nr, nm, rel_copy, ent_copy) = batch
 
-            sl = subs.cpu().tolist()
-            rl = rels.cpu().tolist()
-            tl = times.cpu().tolist()
-
-            ne, nr, nm = self.loader.build_neighborhood_batch(sl, tl)
-            ne  = ne.to(self.device)
-            nr  = nr.to(self.device)
-            nm  = nm.to(self.device)
-
-            rel_copy = self.loader.get_rel_copy_batch(sl, rl, tl).to(self.device)
-            ent_copy = self.loader.get_ent_copy_batch(sl, tl).to(self.device)
+            subs     = subs.to(self.device)
+            rels     = rels.to(self.device)
+            objs     = objs.to(self.device)
+            times    = times.to(self.device)
+            ne       = ne.to(self.device)
+            nr       = nr.to(self.device)
+            nm       = nm.to(self.device)
+            # pad copy scores to num_entities
+            N = self.loader.num_entities
+            if rel_copy.shape[1] < N:
+                pad = torch.zeros(rel_copy.shape[0], N - rel_copy.shape[1])
+                rel_copy = torch.cat([rel_copy, pad], dim=1)
+            if ent_copy.shape[1] < N:
+                pad = torch.zeros(ent_copy.shape[0], N - ent_copy.shape[1])
+                ent_copy = torch.cat([ent_copy, pad], dim=1)
+            rel_copy = rel_copy.to(self.device)
+            ent_copy = ent_copy.to(self.device)
 
             logits     = self.model(subs, rels, ne, nr, nm, rel_copy, ent_copy)
             query_repr = self.model.encode_query(subs, rels, ne, nr, nm)
