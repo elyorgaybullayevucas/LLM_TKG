@@ -12,60 +12,66 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
     "ICEWS18": {
         # model
         "embed_dim":         256,
-        "k_neighbors":       32,    # neighbors sampled per timestep
-        "short_len":         5,     # short-term window (snapshots)
-        "long_len":          30,    # long-term window (snapshots)
-        "rgat_layers":       2,     # R-GAT depth
+        "k_neighbors":       48,    # more neighbors → stronger R-GAT
+        "short_len":         5,
+        "long_len":          30,
+        "rgat_layers":       2,
         "num_heads":         4,
         "dropout":           0.2,
         # copy
         "copy_lambda":       0.5,
         "use_entity_copy":   True,
+        "recency_steps":     2,     # last 2 snapshots → recency burst
+        "recency_boost":     4.0,
         # training
         "epochs":            50,
-        "batch_size":        512,
-        "lr":                5e-4,
-        "alpha_infonce":     0.5,   # InfoNCE loss weight
-        "infonce_temp":      0.07,  # InfoNCE temperature
-        "label_smoothing":   0.1,
-    },
-    "YAGO": {
-        "embed_dim":         128,
-        "k_neighbors":       32,
-        "short_len":         7,
-        "long_len":          40,
-        "rgat_layers":       2,
-        "num_heads":         4,
-        "dropout":           0.1,
-        "copy_lambda":       0.3,
-        "use_entity_copy":   True,
-        "epochs":            30,
-        "batch_size":        512,
-        "lr":                1e-3,
-        "alpha_infonce":     0.4,
-        "infonce_temp":      0.07,
-        "label_smoothing":   0.1,
-    },
-    "WIKI": {
-        "embed_dim":         256,
-        "k_neighbors":       32,
-        "short_len":         6,
-        "long_len":          35,
-        "rgat_layers":       2,
-        "num_heads":         4,
-        "dropout":           0.2,
-        "copy_lambda":       0.4,
-        "use_entity_copy":   True,
-        "epochs":            40,
         "batch_size":        512,
         "lr":                5e-4,
         "alpha_infonce":     0.5,
         "infonce_temp":      0.07,
         "label_smoothing":   0.1,
     },
+    "YAGO": {
+        "embed_dim":         256,
+        "k_neighbors":       64,    # YAGO: 10K entity, can afford more
+        "short_len":         5,
+        "long_len":          30,
+        "rgat_layers":       2,
+        "num_heads":         4,
+        "dropout":           0.1,
+        "copy_lambda":       0.1,   # slow decay: YAGO facts persist long
+        "use_entity_copy":   True,
+        "recency_steps":     3,     # YAGO: very high recurrence → strong burst
+        "recency_boost":     8.0,
+        "epochs":            50,
+        "batch_size":        512,
+        "lr":                5e-4,
+        "alpha_infonce":     0.3,
+        "infonce_temp":      0.07,
+        "label_smoothing":   0.05,
+    },
+    "WIKI": {
+        "embed_dim":         256,
+        "k_neighbors":       64,    # WIKI: 12K entity, can afford more
+        "short_len":         5,
+        "long_len":          30,
+        "rgat_layers":       2,
+        "num_heads":         4,
+        "dropout":           0.15,
+        "copy_lambda":       0.1,   # slow decay: WIKI facts persist long
+        "use_entity_copy":   True,
+        "recency_steps":     3,     # WIKI: high recurrence → strong burst
+        "recency_boost":     8.0,
+        "epochs":            50,
+        "batch_size":        512,
+        "lr":                5e-4,
+        "alpha_infonce":     0.3,
+        "infonce_temp":      0.07,
+        "label_smoothing":   0.05,
+    },
     "GDELT": {
         "embed_dim":         256,
-        "k_neighbors":       32,
+        "k_neighbors":       48,
         "short_len":         5,
         "long_len":          30,
         "rgat_layers":       2,
@@ -73,6 +79,8 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
         "dropout":           0.2,
         "copy_lambda":       0.5,
         "use_entity_copy":   True,
+        "recency_steps":     2,
+        "recency_boost":     4.0,
         "epochs":            40,
         "batch_size":        512,
         "lr":                5e-4,
@@ -101,6 +109,8 @@ class AURORAConfig:
     # copy
     copy_lambda:      float = 0.5
     use_entity_copy:  bool  = True
+    recency_steps:    int   = 2     # last N snapshots → recency burst
+    recency_boost:    float = 4.0   # multiply score if within recency window
     # training
     epochs:           int   = 50
     batch_size:       int   = 512
@@ -149,6 +159,8 @@ def parse_args() -> AURORAConfig:
     p.add_argument("--gpu",             type=int,   default=1)
     p.add_argument("--save_dir",        type=str,   default="checkpoints")
     p.add_argument("--log_dir",         type=str,   default="logs")
+    p.add_argument("--recency_steps",   type=int,   default=None)
+    p.add_argument("--recency_boost",   type=float, default=None)
     p.add_argument("--no_inverse",      dest="use_inverse",
                    action="store_false", default=True)
     p.add_argument("--no_entity_copy",  dest="use_entity_copy",

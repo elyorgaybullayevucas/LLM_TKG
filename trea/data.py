@@ -84,10 +84,19 @@ class GraphIndex:
     # ── relation copy score vector ─────────────────────────────────────────────
 
     def get_rel_copy_scores(self, sub: int, rel: int, query_time: int,
-                            num_entities: int, copy_lambda: float) -> np.ndarray:
-        """copy[o] = log(1+count) × exp(−λ × (t − last_t) / step)"""
+                            num_entities: int, copy_lambda: float,
+                            recency_steps: int = 3,
+                            recency_boost: float = 5.0) -> np.ndarray:
+        """
+        copy[o] = log(1+count) × exp(−λ × (t − last_t) / step)
+
+        Recency burst: if (s,r,o) appeared in the last `recency_steps`
+        snapshots, multiply score by `recency_boost`.
+        This is the dominant signal on WIKI/YAGO where facts repeat.
+        """
         scores = np.zeros(num_entities, dtype=np.float32)
-        step = max(self.step, 1)
+        step   = max(self.step, 1)
+        recency_threshold = recency_steps * step
         for (s_, r_, o_), times in self._sro_times.items():
             if s_ != sub or r_ != rel:
                 continue
@@ -97,8 +106,12 @@ class GraphIndex:
             count  = len(ts)
             last_t = max(ts)
             decay  = np.exp(-copy_lambda * (query_time - last_t) / step)
+            score  = np.log1p(count) * decay
+            # recency burst
+            if (query_time - last_t) <= recency_threshold:
+                score *= recency_boost
             if o_ < num_entities:
-                scores[o_] = np.log1p(count) * decay
+                scores[o_] = score
         return scores
 
     # ── entity copy score vector ───────────────────────────────────────────────
@@ -265,7 +278,10 @@ class TKGDataLoader:
         out = torch.zeros(B, self.num_entities, dtype=torch.float32)
         for i, (s, r, t) in enumerate(zip(subs, rels, times)):
             sc = self.index.get_rel_copy_scores(
-                s, r, t, self.num_entities, self.cfg.copy_lambda
+                s, r, t, self.num_entities,
+                self.cfg.copy_lambda,
+                self.cfg.recency_steps,
+                self.cfg.recency_boost,
             )
             out[i] = torch.from_numpy(sc)
         return out
