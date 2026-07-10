@@ -59,8 +59,8 @@ class AURORATrainer:
             self.device = torch.device(f"cuda:{cfg.gpu}")
             gpu_info    = torch.cuda.get_device_name(cfg.gpu)
             free_mem, _ = torch.cuda.mem_get_info(cfg.gpu)
-            # 85% ni band qilamiz — boshqalar egallay olmasin
-            reserve_gb  = int(free_mem * 0.85) // (1024**3)
+            # 15 GB band qilamiz (model ~5GB, +10GB zapas paralel run uchun)
+            reserve_gb  = min(15, int(free_mem * 0.9) // (1024**3))
             reserve_n   = reserve_gb * (1024**3) // 4  # float32 elements
             print(f"[Device] GPU {cfg.gpu} — {gpu_info}")
             print(f"[GPU]    {free_mem/1024**3:.1f} GB bo'sh → "
