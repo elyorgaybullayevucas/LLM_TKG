@@ -52,13 +52,13 @@ class AURORATrainer:
         set_seed(cfg.seed)
 
         # ── GPU ni DARHOL egallash ────────────────────────────────────────────
+        # CUDA_VISIBLE_DEVICES Python ichida ishlamaydi (torch allaqachon init).
+        # To'g'ri yo'l: cuda:N to'g'ridan-to'g'ri ishlatish.
         use_cuda = cfg.device == "cuda" and torch.cuda.is_available()
         if use_cuda:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.gpu)
-            self.device = torch.device("cuda:0")
-            gpu_info    = torch.cuda.get_device_name(0)
-            total_mem   = torch.cuda.get_device_properties(0).total_memory
-            free_mem    = torch.cuda.mem_get_info()[0]
+            self.device = torch.device(f"cuda:{cfg.gpu}")
+            gpu_info    = torch.cuda.get_device_name(cfg.gpu)
+            free_mem, _ = torch.cuda.mem_get_info(cfg.gpu)
             # 85% ni band qilamiz — boshqalar egallay olmasin
             reserve_gb  = int(free_mem * 0.85) // (1024**3)
             reserve_n   = reserve_gb * (1024**3) // 4  # float32 elements
