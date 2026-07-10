@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
@@ -102,8 +102,14 @@ class AURORATrainer:
         )
         self.optim = AdamW(self.model.parameters(),
                            lr=cfg.lr, weight_decay=cfg.weight_decay)
-        self.sched = CosineAnnealingLR(self.optim, T_max=cfg.epochs,
-                                       eta_min=cfg.lr * 0.01)
+        warmup_epochs = max(1, cfg.epochs // 10)
+        warmup = LinearLR(self.optim, start_factor=0.1, end_factor=1.0,
+                          total_iters=warmup_epochs)
+        cosine = CosineAnnealingLR(self.optim,
+                                   T_max=cfg.epochs - warmup_epochs,
+                                   eta_min=cfg.lr * 0.01)
+        self.sched = SequentialLR(self.optim, [warmup, cosine],
+                                  milestones=[warmup_epochs])
 
         os.makedirs(cfg.save_dir, exist_ok=True)
         os.makedirs(cfg.log_dir,  exist_ok=True)

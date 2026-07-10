@@ -23,7 +23,7 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
         "recency_boost":     4.0,
         "epochs":            50,
         "batch_size":        1024,
-        "lr":                5e-4,
+        "lr":                2e-4,
         "alpha_infonce":     0.5,
         "infonce_temp":      0.07,
         "label_smoothing":   0.1,
