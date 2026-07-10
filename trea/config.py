@@ -22,7 +22,7 @@ DATASET_CONFIGS: Dict[str, Dict[str, Any]] = {
         "recency_steps":     2,
         "recency_boost":     4.0,
         "epochs":            50,
-        "batch_size":        512,
+        "batch_size":        2048,
         "lr":                5e-4,
         "alpha_infonce":     0.5,
         "infonce_temp":      0.07,
@@ -110,7 +110,7 @@ class AURORAConfig:
     recency_boost:    float = 4.0   # multiply score if within recency window
     # training
     epochs:           int   = 50
-    batch_size:       int   = 512
+    batch_size:       int   = 2048
     lr:               float = 5e-4
     weight_decay:     float = 1e-5
     grad_clip:        float = 1.0

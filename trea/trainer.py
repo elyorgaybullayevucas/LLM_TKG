@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from trea.config import AURORAConfig
@@ -74,6 +75,10 @@ class AURORATrainer:
                        if p.requires_grad)
         print(f"[Model] AURORA-TKG  params={n_params:,}")
 
+        # AMP scaler (bfloat16 on A100 — native hardware support)
+        self.use_amp = (self.device.type == "cuda")
+        self.scaler  = GradScaler(enabled=self.use_amp)
+
         # loss / optim / scheduler
         self.loss_fn = AURORALoss(
             smoothing=cfg.label_smoothing,
@@ -131,16 +136,20 @@ class AURORATrainer:
             rel_copy = rel_copy.to(self.device)
             ent_copy = ent_copy.to(self.device)
 
-            logits     = self.model(subs, rels, ne, nr, nm, rel_copy, ent_copy)
-            query_repr = self.model.encode_query(subs, rels, ne, nr, nm)
-
-            loss_d = self.loss_fn(logits, objs, query_repr, self.model.ent_emb)
+            with autocast(dtype=torch.bfloat16, enabled=self.use_amp):
+                logits     = self.model(subs, rels, ne, nr, nm,
+                                        rel_copy, ent_copy)
+                query_repr = self.model.encode_query(subs, rels, ne, nr, nm)
+                loss_d     = self.loss_fn(logits, objs, query_repr,
+                                          self.model.ent_emb)
 
             self.optim.zero_grad()
-            loss_d["_total"].backward()
+            self.scaler.scale(loss_d["_total"]).backward()
+            self.scaler.unscale_(self.optim)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(),
                                             cfg.grad_clip)
-            self.optim.step()
+            self.scaler.step(self.optim)
+            self.scaler.update()
 
             tot_total += loss_d["total"]
             tot_ce    += loss_d["ce"]
