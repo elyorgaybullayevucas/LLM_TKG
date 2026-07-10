@@ -51,21 +51,36 @@ class AURORATrainer:
         self.cfg = cfg
         set_seed(cfg.seed)
 
-        # device
+        # ── GPU ni DARHOL egallash ────────────────────────────────────────────
         use_cuda = cfg.device == "cuda" and torch.cuda.is_available()
         if use_cuda:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.gpu)
             self.device = torch.device("cuda:0")
             gpu_info    = torch.cuda.get_device_name(0)
+            total_mem   = torch.cuda.get_device_properties(0).total_memory
+            free_mem    = torch.cuda.mem_get_info()[0]
+            # 85% ni band qilamiz — boshqalar egallay olmasin
+            reserve_gb  = int(free_mem * 0.85) // (1024**3)
+            reserve_n   = reserve_gb * (1024**3) // 4  # float32 elements
             print(f"[Device] GPU {cfg.gpu} — {gpu_info}")
+            print(f"[GPU]    {free_mem/1024**3:.1f} GB bo'sh → "
+                  f"{reserve_gb} GB band qilinmoqda …")
+            _placeholder = torch.zeros(reserve_n, device=self.device)
+            print(f"[GPU]    Joy band qilindi ✓")
         else:
             self.device = torch.device("cpu")
+            _placeholder = None
             print("[Device] CPU")
 
-        # data
+        # ── data (CPU da pre-computation) ────────────────────────────────────
         self.loader = TKGDataLoader(cfg)
 
-        # model
+        # ── model GPU ga ──────────────────────────────────────────────────────
+        # Placeholder ni bo'shatamiz — model + training shu xotirani ishlatadi
+        if _placeholder is not None:
+            del _placeholder
+            torch.cuda.empty_cache()
+
         self.model = AURORAModel(
             num_entities=self.loader.num_entities,
             num_relations=self.loader.num_relations,
