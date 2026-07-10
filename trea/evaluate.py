@@ -13,7 +13,7 @@ from typing import Dict, List
 from tqdm import tqdm
 
 from trea.model import AURORAModel
-from trea.data import TKGDataLoader
+from trea.data import TKGDataLoader, aurora_collate
 
 
 @torch.no_grad()
@@ -31,25 +31,32 @@ def evaluate(
     dataset = loader.valid_set if split == "valid" else loader.test_set
     cfg     = loader.cfg
     dl      = DataLoader(dataset, batch_size=batch_size,
-                         shuffle=False, num_workers=0)
+                         shuffle=False, num_workers=0,
+                         collate_fn=aurora_collate)
 
     mrr_sum = 0.0
     hits    = {k: 0.0 for k in hits_at}
     total   = 0
 
+    N = loader.num_entities
     for batch in tqdm(dl, desc=f"Eval [{split}]", disable=not verbose,
                       dynamic_ncols=True):
-        subs, rels, objs, times = [x.to(device) for x in batch]
+        (subs, rels, objs, times,
+         ne, nr, nm, rel_copy, ent_copy) = batch
 
-        sl = subs.cpu().tolist()
-        rl = rels.cpu().tolist()
-        tl = times.cpu().tolist()
+        subs = subs.to(device); rels = rels.to(device)
+        objs = objs.to(device)
+        ne   = ne.to(device);   nr   = nr.to(device);  nm = nm.to(device)
 
-        ne, nr, nm = loader.build_neighborhood_batch(sl, tl)
-        ne, nr, nm = ne.to(device), nr.to(device), nm.to(device)
-
-        rel_copy = loader.get_rel_copy_batch(sl, rl, tl).to(device)
-        ent_copy = loader.get_ent_copy_batch(sl, tl).to(device)
+        # pad copy scores to num_entities
+        if rel_copy.shape[1] < N:
+            rel_copy = torch.cat([rel_copy,
+                torch.zeros(rel_copy.shape[0], N - rel_copy.shape[1])], dim=1)
+        if ent_copy.shape[1] < N:
+            ent_copy = torch.cat([ent_copy,
+                torch.zeros(ent_copy.shape[0], N - ent_copy.shape[1])], dim=1)
+        rel_copy = rel_copy.to(device)
+        ent_copy = ent_copy.to(device)
 
         logits = model(subs, rels, ne, nr, nm, rel_copy, ent_copy)   # (B, N)
 

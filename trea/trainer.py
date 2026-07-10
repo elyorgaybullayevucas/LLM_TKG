@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from trea.config import AURORAConfig
@@ -92,7 +92,7 @@ class AURORATrainer:
 
         # AMP scaler (bfloat16 on A100 — native hardware support)
         self.use_amp = (self.device.type == "cuda")
-        self.scaler  = GradScaler(enabled=self.use_amp)
+        self.scaler  = GradScaler("cuda", enabled=self.use_amp)
 
         # loss / optim / scheduler
         self.loss_fn = AURORALoss(
@@ -151,7 +151,7 @@ class AURORATrainer:
             rel_copy = rel_copy.to(self.device)
             ent_copy = ent_copy.to(self.device)
 
-            with autocast(dtype=torch.bfloat16, enabled=self.use_amp):
+            with autocast("cuda", dtype=torch.bfloat16, enabled=self.use_amp):
                 logits     = self.model(subs, rels, ne, nr, nm,
                                         rel_copy, ent_copy)
                 query_repr = self.model.encode_query(subs, rels, ne, nr, nm)
