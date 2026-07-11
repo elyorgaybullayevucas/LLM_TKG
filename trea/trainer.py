@@ -11,7 +11,7 @@ from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from trea.config import AURORAConfig
-from trea.model import AURORAModel
+from trea.model import CREATModel as AURORAModel
 from trea.loss import AURORALoss
 from trea.data import TKGDataLoader, aurora_collate
 from trea.evaluate import evaluate

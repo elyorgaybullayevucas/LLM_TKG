@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from typing import Dict, List
 from tqdm import tqdm
 
-from trea.model import AURORAModel
+from trea.model import CREATModel as AURORAModel
 from trea.data import TKGDataLoader, aurora_collate
 
 

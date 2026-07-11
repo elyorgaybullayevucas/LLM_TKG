@@ -1,98 +1,73 @@
 """
-AURORA-TKG — Adaptive Unified Reasoning Over Relational Associations.
+CREAT-TKG — Copy-Residual Encoding with Adaptive Temporal modeling.
 
-Architecture overview:
-  ┌──────────────────────────────────────────────────────────┐
-  │  (s, r, t) query                                         │
-  │       │                                                  │
-  │  ┌────┴──────────────────────┐  ┌──────────────────────┐ │
-  │  │  HierarchicalEncoder      │  │  Dual Copy Path      │ │
-  │  │  ─────────────────────    │  │  ─────────────────── │ │
-  │  │  R-GAT per snapshot       │  │  rel-copy: (s,r,o)   │ │
-  │  │  Short Transformer (S)    │  │  ent-copy: (s,*,o)   │ │
-  │  │  Long  Transformer (L)    │  │  MLP decay weights   │ │
-  │  │  Cross-attention          │  └──────────┬───────────┘ │
-  │  └────────────┬──────────────┘             │             │
-  │               │  h_ctx                     │             │
-  │  ┌────────────┴────────────────────────────┤             │
-  │  │  QueryProj: MLP([h_s; h_r; h_ctx] → q)  │             │
-  │  │  embed_logits = q @ E^T                  │             │
-  │  └────────────────────────────────────────┘             │
-  │                                                          │
-  │  AdaptiveGate: g · embed + (1-g) · copy                  │
-  └──────────────────────────────────────────────────────────┘
+Core insight that fixes the previous AURORA failure:
+  final_score = neural_score + log1p(copy_score) * copy_scale
 
-Key novelties vs TREA-TKG:
-  1. R-GAT over K sampled neighbors per temporal snapshot
-  2. Hierarchical short+long temporal encoder with cross-attention
-  3. Dual copy (relation-specific + entity co-occurrence)
-  4. InfoNCE contrastive training
+Copy is an ADDITIVE LOG-SPACE OFFSET, not a competing gate.
+This means:
+  - If copy(o) = 0  → log1p(0) = 0  → no effect on neural score
+  - If copy(o) > 0  → always boosts entity o (never hurts)
+  - copy_scale (learned scalar) controls how much weight to give history
+  - Neural learns to predict novel entities; copy handles repetition
+
+Architecture:
+  1. Entity/relation embeddings (Xavier init)
+  2. SnapshotAggregator: R-biased mean over K neighbors per snapshot → (B,H,d)
+  3. 2-layer GRU over H snapshots → temporal context h_t (B,d)
+  4. Query: MLP([h_s; h_t; h_r]) → q (B,d)
+  5. Neural score: q @ E^T  (B,N)
+  6. Copy offset: log1p(α*rel_copy + β*ent_copy) * copy_scale
+  7. Final = neural + copy_offset
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from trea.config import AURORAConfig
-from trea.layers import HierarchicalEncoder
+from trea.layers import SnapshotAggregator
 
 
-class AURORAModel(nn.Module):
+class CREATModel(nn.Module):
 
     def __init__(self, num_entities: int, num_relations: int,
                  cfg: AURORAConfig):
         super().__init__()
-        d = cfg.embed_dim
-        # double relations for inverse triples
-        R = num_relations * (2 if cfg.use_inverse else 1)
-        self.num_entities = num_entities
-        self.R   = R
+        d   = cfg.embed_dim
+        R   = num_relations * (2 if cfg.use_inverse else 1)
         self.cfg = cfg
+        self.num_entities = num_entities
 
         # ── embeddings ────────────────────────────────────────────────────────
         self.ent_emb = nn.Embedding(num_entities, d)
         self.rel_emb = nn.Embedding(R, d)
+        nn.init.xavier_normal_(self.ent_emb.weight)
+        nn.init.xavier_normal_(self.rel_emb.weight)
 
-        # Xavier init for stable training
-        nn.init.xavier_uniform_(self.ent_emb.weight)
-        nn.init.xavier_uniform_(self.rel_emb.weight)
-
-        # ── hierarchical temporal encoder ──────────────────────────────────────
-        self.encoder = HierarchicalEncoder(
-            d=d,
-            num_heads=cfg.num_heads,
-            num_relations=R,
-            short_len=cfg.short_len,
-            long_len=cfg.long_len,
-            dropout=cfg.dropout,
-        )
+        # ── temporal encoder ─────────────────────────────────────────────────
+        self.snap_agg = SnapshotAggregator(d, cfg.dropout)
+        gru_dropout = cfg.dropout if cfg.dropout > 0 else 0.0
+        self.gru = nn.GRU(d, d, num_layers=2, batch_first=True,
+                          dropout=gru_dropout)
 
         # ── query projection ──────────────────────────────────────────────────
         self.query_proj = nn.Sequential(
             nn.Linear(d * 3, d * 2),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Dropout(cfg.dropout),
             nn.Linear(d * 2, d),
             nn.LayerNorm(d),
         )
 
+        # ── score projection ──────────────────────────────────────────────────
+        self.score_proj = nn.Linear(d, d, bias=False)
+
         # ── copy mechanism ────────────────────────────────────────────────────
-        # per-relation copy temperature (learned)
-        self.rel_copy_temp = nn.Embedding(R, 1)
-        nn.init.ones_(self.rel_copy_temp.weight)
-
-        # dual copy gate: how much to weight rel_copy vs ent_copy
-        if cfg.use_entity_copy:
-            self.copy_mix = nn.Sequential(
-                nn.Linear(d, 2),
-                nn.Softmax(dim=-1),
-            )
-
-        # ── adaptive gate ─────────────────────────────────────────────────────
-        self.gate_mlp = nn.Sequential(
-            nn.Linear(d, cfg.gate_hidden),
-            nn.GELU(),
-            nn.Linear(cfg.gate_hidden, 1),
-        )
+        # Learnable weights for rel_copy vs ent_copy blend
+        self.copy_w = nn.Parameter(torch.tensor([1.0, 0.5]))
+        # Global scale for the copy offset (exp so it stays positive)
+        # Starts at exp(0)=1.0 — will grow larger for WIKI/YAGO
+        self.log_copy_scale = nn.Parameter(torch.zeros(1))
 
         self.drop = nn.Dropout(cfg.dropout)
 
@@ -107,55 +82,46 @@ class AURORAModel(nn.Module):
         neigh_mask: torch.Tensor,   # (B, H, K) bool
     ) -> torch.Tensor:              # (B, d)
 
-        h_s = self.ent_emb(subs)    # (B, d)
-        h_r = self.rel_emb(rels)    # (B, d)
+        h_s     = self.ent_emb(subs)              # (B, d)
+        h_r     = self.rel_emb(rels)              # (B, d)
+        h_neigh = self.ent_emb(neigh_ents)        # (B, H, K, d)
 
-        # look up neighbor entity embeddings
-        h_neigh = self.ent_emb(neigh_ents)   # (B, H, K, d)
+        # aggregate neighbors per snapshot
+        h_snap = self.snap_agg(h_s, h_neigh, neigh_rels,
+                               neigh_mask, self.rel_emb)   # (B, H, d)
 
-        # hierarchical encoder
-        h_ctx = self.encoder(h_s, h_neigh, neigh_rels, neigh_mask,
-                             self.rel_emb)    # (B, d)
+        # GRU over H snapshots
+        _, h_gru = self.gru(h_snap)               # h_gru: (2, B, d)
+        h_t = self.drop(h_gru[-1])                # (B, d)  last layer
 
-        # project to query vector
-        q = self.query_proj(torch.cat([h_s, h_r, h_ctx], dim=-1))  # (B, d)
-        return self.drop(q)
-
-    # ── scoring ───────────────────────────────────────────────────────────────
-
-    def embed_score(self, query_repr: torch.Tensor) -> torch.Tensor:
-        """(B, d) × (N, d)^T → (B, N)"""
-        return query_repr @ self.ent_emb.weight.t()
+        # query vector
+        q = self.query_proj(torch.cat([h_s, h_t, h_r], dim=-1))   # (B, d)
+        return q
 
     # ── forward ───────────────────────────────────────────────────────────────
 
     def forward(
         self,
-        subs:        torch.Tensor,   # (B,)
-        rels:        torch.Tensor,   # (B,)
-        neigh_ents:  torch.Tensor,   # (B, H, K)
-        neigh_rels:  torch.Tensor,   # (B, H, K)
-        neigh_mask:  torch.Tensor,   # (B, H, K) bool
-        rel_copy:    torch.Tensor,   # (B, N)  pre-computed
-        ent_copy:    torch.Tensor,   # (B, N)  pre-computed (zeros if disabled)
-    ) -> torch.Tensor:               # (B, N)
+        subs:       torch.Tensor,   # (B,)
+        rels:       torch.Tensor,   # (B,)
+        neigh_ents: torch.Tensor,   # (B, H, K)
+        neigh_rels: torch.Tensor,   # (B, H, K)
+        neigh_mask: torch.Tensor,   # (B, H, K) bool
+        rel_copy:   torch.Tensor,   # (B, N)
+        ent_copy:   torch.Tensor,   # (B, N)
+    ) -> torch.Tensor:              # (B, N)
 
-        query_repr = self.encode_query(subs, rels, neigh_ents,
-                                       neigh_rels, neigh_mask)   # (B, d)
+        q = self.encode_query(subs, rels, neigh_ents, neigh_rels, neigh_mask)
 
-        embed_logits = self.embed_score(query_repr)              # (B, N)
+        # neural score in logit space
+        neural = self.score_proj(q) @ self.ent_emb.weight.t()     # (B, N)
 
-        # copy: scale with per-relation learned temperature
-        temp = F.softplus(self.rel_copy_temp(rels))              # (B, 1)
-        rel_copy_scaled = rel_copy * temp
+        # copy: weighted blend → log-space offset
+        # softmax ensures positive, normalized weights
+        w = torch.softmax(self.copy_w, dim=0)
+        copy_blend = w[0] * rel_copy + w[1] * ent_copy             # (B, N)
+        copy_scale = torch.exp(self.log_copy_scale)
+        copy_offset = torch.log1p(copy_blend) * copy_scale         # (B, N)
 
-        if self.cfg.use_entity_copy:
-            mix = self.copy_mix(query_repr)                       # (B, 2)
-            copy_logits = (mix[:, 0:1] * rel_copy_scaled
-                           + mix[:, 1:2] * ent_copy)
-        else:
-            copy_logits = rel_copy_scaled
-
-        # adaptive gate: query decides how much to trust copy vs embed
-        g = torch.sigmoid(self.gate_mlp(query_repr))             # (B, 1)
-        return g * embed_logits + (1 - g) * copy_logits
+        # additive: copy only boosts, never hurts; neural handles novel entities
+        return neural + copy_offset
